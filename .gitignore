@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec.bak
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# PyInstaller
+*.manifest
+*.spec~
+
+# Build outputs
+dist/
+build/
+*.exe
+*.msi
+
+# WhatsApp Manager specific
+sessions/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Test files
+TEST_*.bat
+DEBUG_*.bat
+debug_*.py
+
+# Temporary files
+*.tmp
+*.bak
+*_old.py
+*_backup.py
