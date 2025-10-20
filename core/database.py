@@ -81,6 +81,17 @@ class Database:
         conn.commit()
         conn.close()
     
+    def update_account_name(self, account_id, new_name):
+        """Update account name"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE accounts SET name = ? WHERE id = ?",
+            (new_name, account_id)
+        )
+        conn.commit()
+        conn.close()
+    
     def set_password(self, account_id, password):
         """Set/update password for account (stores hash)"""
         if password:

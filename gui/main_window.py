@@ -42,8 +42,9 @@ class MainWindow(QMainWindow):
         
         # Global controls bar (zoom, lock, reload, add) - all in tab bar
         controls_container = QWidget()
+        controls_container.setObjectName("controls_container")
         controls_layout = QHBoxLayout(controls_container)
-        controls_layout.setContentsMargins(5, 2, 5, 2)
+        controls_layout.setContentsMargins(5, 5, 5, 5)
         controls_layout.setSpacing(4)
         
         # Zoom Out button
@@ -224,26 +225,29 @@ class MainWindow(QMainWindow):
             /* Browser-style tabs - Fresh theme */
             QTabWidget {
                 background-color: #1f2c34;
-                border: none;
+                border: 0px;
             }
             QTabWidget::pane {
-                border: none;
-                border-top: none;
+                border: 0px;
                 background-color: #0b141a;
-                top: 0px;
-                margin: 0px;
+                margin-top: 0px;
                 padding: 0px;
+            }
+            QTabWidget::tab-bar {
+                left: 0px;
+                top: 0px;
             }
             QTabBar {
                 background-color: #1f2c34;
-                border: none;
+                border: 0px;
+                qproperty-drawBase: 0;
             }
             QTabBar::tab {
                 background-color: #00a884;
                 color: white;
                 padding: 8px 16px;
                 margin-right: 3px;
-                border: none;
+                border: 0px;
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
                 min-width: 120px;
@@ -262,12 +266,20 @@ class MainWindow(QMainWindow):
                 margin: 2px;
                 padding: 0px;
             }
+            QTabBar::scroller {
+                width: 0px;
+            }
+            QTabBar QToolButton {
+                background-color: #1f2c34;
+                border: 0px;
+            }
             
             /* Global controls in tab bar - Fresh theme */
-            QWidget#controls_container {
+            #controls_container {
                 background-color: transparent;
+                border: none;
             }
-            QWidget#controls_container QPushButton {
+            #controls_container QPushButton {
                 background-color: #00a884;
                 color: white;
                 border: none;
@@ -275,13 +287,13 @@ class MainWindow(QMainWindow):
                 font-size: 14px;
                 font-weight: bold;
             }
-            QWidget#controls_container QPushButton:hover {
+            #controls_container QPushButton:hover {
                 background-color: #06cf9c;
             }
-            QWidget#controls_container QPushButton:pressed {
+            #controls_container QPushButton:pressed {
                 background-color: #008f6d;
             }
-            QWidget#controls_container QPushButton:disabled {
+            #controls_container QPushButton:disabled {
                 background-color: #2a3942;
                 color: #666;
             }
@@ -525,6 +537,13 @@ class MainWindow(QMainWindow):
         # Create context menu
         menu = QMenu(self)
         
+        # Rename Tab
+        rename_action = QAction("✏️ Rename", self)
+        rename_action.triggered.connect(lambda: self.rename_tab(account_id))
+        menu.addAction(rename_action)
+        
+        menu.addSeparator()
+        
         # Set/Change Password
         password_action = QAction("🔑 Set/Change Password", self)
         password_action.triggered.connect(lambda: self.set_tab_password(account_id))
@@ -545,6 +564,44 @@ class MainWindow(QMainWindow):
         
         # Show menu
         menu.exec(tab_bar.mapToGlobal(position))
+    
+    def rename_tab(self, account_id):
+        """Rename tab"""
+        if account_id not in self.tabs:
+            return
+        
+        old_name = self.tabs[account_id]["name"]
+        
+        # Get new name
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Account",
+            "Enter new account name:",
+            QLineEdit.EchoMode.Normal,
+            old_name
+        )
+        
+        if ok and new_name and new_name != old_name:
+            # Update database
+            self.db.update_account_name(account_id, new_name)
+            
+            # Update tabs dict
+            self.tabs[account_id]["name"] = new_name
+            
+            # Update tab widget
+            widget = self.tabs[account_id]["widget"]
+            widget.name = new_name
+            
+            # Update tab title
+            index = self.tabs[account_id]["index"]
+            current_title = self.tab_widget.tabText(index)
+            
+            # Preserve lock icon if exists
+            lock_icon = "🔒 " if current_title.startswith("🔒") else ""
+            tab_title = f"{lock_icon}💬 {new_name}" if len(new_name) <= 10 else f"{lock_icon}💬 {new_name[:10]}..."
+            self.tab_widget.setTabText(index, tab_title)
+            
+            print(f"Account renamed from '{old_name}' to '{new_name}'")
     
     def set_tab_password(self, account_id):
         """Set or change password for tab"""

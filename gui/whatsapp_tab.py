@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QInputDialog, QMessageBox
-from PyQt6.QtCore import QUrl, Qt
+from PyQt6.QtCore import QUrl, Qt, QTimer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -15,10 +15,14 @@ class WhatsAppTab(QWidget):
         self.has_password = has_password
         self.is_locked = has_password  # Lock by default if password set
         self.db = db
+        self.profile = None  # Store profile to prevent garbage collection
         
         self.setup_ui()
         self.setup_shortcuts()
-        self.load_whatsapp()
+        
+        # Load WhatsApp after widget is fully initialized
+        if not self.is_locked and self.web_view:
+            QTimer.singleShot(100, self.load_whatsapp)
     
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -32,10 +36,10 @@ class WhatsAppTab(QWidget):
         self.lock_screen = None
         
         if self.is_locked:
-            # Show lock screen instead of WebView
-            self.show_lock_screen(layout)
+            # Show lock screen only (no webview yet)
+            self.show_lock_screen()
         else:
-            # Show WebView
+            # Create and show WebView
             self.create_webview()
             if self.web_view:
                 layout.addWidget(self.web_view)
@@ -68,28 +72,48 @@ class WhatsAppTab(QWidget):
         try:
             print(f"Creating webview for {self.name}...")
             
-            # Create profile with unique name
-            profile = QWebEngineProfile(f"profile_{self.account_id}", self)
-            profile.setPersistentStoragePath(self.session_dir)
-            profile.setCachePath(os.path.join(self.session_dir, "cache"))
+            # Create profile with unique name and store as instance variable
+            self.profile = QWebEngineProfile(f"profile_{self.account_id}")
+            self.profile.setPersistentStoragePath(self.session_dir)
+            self.profile.setCachePath(os.path.join(self.session_dir, "cache"))
+            
+            # Memory optimization - set cache size limits (50MB max)
+            self.profile.setHttpCacheMaximumSize(50 * 1024 * 1024)  # 50MB
             
             # Set modern Chrome User Agent to bypass WhatsApp Web detection
             user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            profile.setHttpUserAgent(user_agent)
+            self.profile.setHttpUserAgent(user_agent)
             
-            # Enable all necessary features
-            settings = profile.settings()
+            # Enable necessary features with balanced memory optimization
+            settings = self.profile.settings()
             settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, False)
-            settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
-            settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
+            
+            # Disable only non-essential features to save memory
+            settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.PdfViewerEnabled, False)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadIconsForPage, False)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.TouchIconsEnabled, False)
+            
+            # Enable WebGL for WhatsApp Web compatibility (needed for QR)
+            try:
+                settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+                # Keep 2D acceleration disabled to save memory
+                settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, False)
+            except Exception as e:
+                print(f"Warning: Could not configure GPU features: {e}")
             
             # Create page
-            page = QWebEnginePage(profile, self)
+            page = QWebEnginePage(self.profile, self)
+            
+            # Connect to signals for stability
+            page.loadFinished.connect(self.on_page_loaded)
+            page.renderProcessTerminated.connect(self.on_render_process_terminated)
             
             # Create webview
             self.web_view = QWebEngineView(self)
@@ -103,16 +127,50 @@ class WhatsAppTab(QWidget):
             traceback.print_exc()
             self.web_view = None
     
+    def on_page_loaded(self, ok):
+        """Called when page finishes loading"""
+        if ok and self.web_view:
+            try:
+                # Inject JavaScript to hide automation detection
+                js_script = """
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                """
+                self.web_view.page().runJavaScript(js_script)
+                print(f"Page loaded successfully for {self.name}")
+            except Exception as e:
+                print(f"Error injecting JS for {self.name}: {e}")
+        elif not ok:
+            print(f"Page load failed for {self.name}")
+    
+    def on_render_process_terminated(self, terminationStatus, exitCode):
+        """Called when render process crashes or terminates"""
+        try:
+            print(f"WARNING: Render process terminated for {self.name}")
+            print(f"Status: {terminationStatus}, Exit code: {exitCode}")
+            
+            # Show error message to user
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "WhatsApp Web Crashed",
+                f"WhatsApp Web for '{self.name}' has crashed.\n\n"
+                "Click the reload button to try again."
+            )
+            
+        except Exception as e:
+            print(f"Error handling render process termination: {e}")
+    
     def load_whatsapp(self):
         if self.web_view:
-            # Inject JavaScript to hide automation detection
-            js_script = """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            """
-            self.web_view.page().runJavaScript(js_script)
-            self.web_view.setUrl(QUrl("https://web.whatsapp.com"))
+            try:
+                print(f"Loading WhatsApp Web for {self.name}...")
+                self.web_view.setUrl(QUrl("https://web.whatsapp.com"))
+            except Exception as e:
+                print(f"ERROR loading WhatsApp for {self.name}: {e}")
+                import traceback
+                traceback.print_exc()
     
     def reload_whatsapp(self):
         if self.web_view:
@@ -155,29 +213,50 @@ class WhatsAppTab(QWidget):
         """Get current zoom level for saving"""
         return self.zoom_level
     
-    def show_lock_screen(self, parent_layout):
-        """Show lock screen overlay"""
+    def show_lock_screen(self, parent_layout=None):
+        """Show lock screen"""
         from PyQt6.QtWidgets import QVBoxLayout
         
-        self.lock_screen = QWidget()
+        if self.lock_screen:
+            self.lock_screen.show()
+            return
+        
+        self.lock_screen = QWidget(self)
+        self.lock_screen.setObjectName("lockScreen")
         lock_layout = QVBoxLayout(self.lock_screen)
         lock_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lock_layout.setContentsMargins(20, 20, 20, 20)
         
         # Lock icon
         lock_icon = QLabel("🔒")
-        lock_icon.setStyleSheet("font-size: 72px;")
+        lock_icon.setStyleSheet("""
+            font-size: 72px;
+            background: transparent;
+        """)
         lock_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lock_layout.addWidget(lock_icon)
         
         # Title
         lock_title = QLabel(f"{self.name}")
-        lock_title.setStyleSheet("font-size: 20px; color: white; font-weight: bold; margin-top: 20px;")
+        lock_title.setStyleSheet("""
+            font-size: 20px;
+            color: white;
+            font-weight: bold;
+            margin-top: 20px;
+            background: transparent;
+        """)
         lock_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lock_layout.addWidget(lock_title)
         
         # Subtitle
         lock_subtitle = QLabel("This tab is locked")
-        lock_subtitle.setStyleSheet("font-size: 14px; color: #aaa; margin-top: 10px; margin-bottom: 30px;")
+        lock_subtitle.setStyleSheet("""
+            font-size: 14px;
+            color: #aaa;
+            margin-top: 10px;
+            margin-bottom: 30px;
+            background: transparent;
+        """)
         lock_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lock_layout.addWidget(lock_subtitle)
         
@@ -189,7 +268,7 @@ class WhatsAppTab(QWidget):
                 background-color: #00a884;
                 color: white;
                 border: none;
-                border-radius: 6px;
+                border-radius: 8px;
                 font-size: 14px;
                 font-weight: bold;
             }
@@ -203,8 +282,23 @@ class WhatsAppTab(QWidget):
         unlock_btn.clicked.connect(self.unlock_with_password)
         lock_layout.addWidget(unlock_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         
-        self.lock_screen.setStyleSheet("background-color: #0b141a;")
-        parent_layout.addWidget(self.lock_screen)
+        # Style with solid dark background
+        self.lock_screen.setStyleSheet("""
+            #lockScreen {
+                background-color: #0b141a;
+            }
+        """)
+        
+        # Position to cover entire tab area
+        self.lock_screen.setGeometry(0, 0, self.width(), self.height())
+        self.lock_screen.show()
+        self.lock_screen.raise_()  # Bring to front
+    
+    def resizeEvent(self, event):
+        """Handle resize to keep lock screen covering entire area"""
+        super().resizeEvent(event)
+        if self.lock_screen and self.lock_screen.isVisible():
+            self.lock_screen.setGeometry(0, 0, self.width(), self.height())
     
     def toggle_lock(self):
         """Toggle lock/unlock state"""
@@ -246,21 +340,18 @@ class WhatsAppTab(QWidget):
         try:
             self.is_locked = True
             
-            # Hide webview
+            # Hide and remove webview
             if self.web_view:
                 self.web_view.hide()
+                self.web_view.setParent(None)
             
-            # Show or create lock screen
-            if self.lock_screen:
-                # Lock screen already exists, just show it
-                self.lock_screen.show()
+            # Show lock screen
+            if not self.lock_screen:
+                self.show_lock_screen()
             else:
-                # Create lock screen
-                layout = self.layout()
-                if layout:
-                    self.show_lock_screen(layout)
-                else:
-                    print(f"WARNING: No layout found for {self.name}")
+                self.lock_screen.setGeometry(0, 0, self.width(), self.height())
+                self.lock_screen.show()
+                self.lock_screen.raise_()
             
             print(f"Tab locked: {self.name}")
         except Exception as e:
@@ -273,15 +364,16 @@ class WhatsAppTab(QWidget):
         try:
             self.is_locked = False
             
-            # Hide lock screen
+            # Hide lock screen first
             if self.lock_screen:
                 self.lock_screen.hide()
             
             # Show or create webview
             if self.web_view:
-                # Webview already exists, just show it
+                # Webview exists, re-add to layout and show
+                self.layout().addWidget(self.web_view)
                 self.web_view.show()
-                print(f"Tab unlocked: {self.name} (webview shown)")
+                print(f"Tab unlocked: {self.name} (webview restored)")
             else:
                 # Webview doesn't exist, create it
                 print(f"Creating webview for {self.name}...")
@@ -292,11 +384,11 @@ class WhatsAppTab(QWidget):
                     self.layout().addWidget(self.web_view)
                     self.web_view.show()
                     
-                    # Load WhatsApp
-                    self.load_whatsapp()
-                    
                     # Apply zoom
                     self.apply_zoom()
+                    
+                    # Load WhatsApp with delay
+                    QTimer.singleShot(100, self.load_whatsapp)
                     
                     print(f"Tab unlocked: {self.name} (webview created)")
                 else:
@@ -314,18 +406,6 @@ class WhatsAppTab(QWidget):
             traceback.print_exc()
             # Try to recover by locking again
             self.is_locked = True
-            self.lock_btn.setText("🔒")
-            self.update_lock_button_tooltip()
-    
-    def update_lock_button_tooltip(self):
-        """Update lock button tooltip"""
-        if self.has_password:
-            if self.is_locked:
-                self.lock_btn.setToolTip("Unlock (Enter password)")
-            else:
-                self.lock_btn.setToolTip("Lock this tab")
-        else:
-            self.lock_btn.setToolTip("Set password to enable lock")
     
     def cleanup(self):
         """Cleanup webview resources safely"""
@@ -342,5 +422,10 @@ class WhatsAppTab(QWidget):
                 self.web_view.deleteLater()
                 self.web_view = None
                 print(f"WebView cleanup successful for {self.name}")
+            
+            # Cleanup profile
+            if self.profile:
+                self.profile.deleteLater()
+                self.profile = None
         except Exception as e:
             print(f"Error in cleanup for {self.name}: {e}")
