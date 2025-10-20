@@ -19,9 +19,27 @@ def main():
         "--no-first-run "
         "--no-default-browser-check "
         "--disable-sync "
-        # Limit processes and memory (512MB per renderer)
-        "--renderer-process-limit=3 "
-        "--js-flags=--max-old-space-size=512"
+        # Limit processes and memory (increased for multiple accounts)
+        "--renderer-process-limit=15 "
+        "--js-flags=--max-old-space-size=768 "
+        # Prevent shared worker crashes
+        "--disable-shared-workers "
+        # Enable process-per-site for better isolation
+        "--process-per-site "
+        # GPU and rendering stability (critical for QR code loading)
+        "--disable-software-rasterizer "
+        "--ignore-gpu-blocklist "
+        "--enable-gpu-rasterization "
+        # Prevent renderer crashes during heavy loads
+        "--disable-hang-monitor "
+        "--disable-prompt-on-repost "
+        # Canvas and WebGL stability for QR codes
+        "--enable-webgl "
+        "--enable-accelerated-2d-canvas "
+        # Process crash recovery
+        "--disable-renderer-backgrounding "
+        "--disable-background-timer-throttling "
+        "--disable-backgrounding-occluded-windows"
     )
     
     app = QApplication(sys.argv)

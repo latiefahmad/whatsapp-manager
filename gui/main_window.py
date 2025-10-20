@@ -40,6 +40,9 @@ class MainWindow(QMainWindow):
         self.tab_widget.customContextMenuRequested.connect(self.show_tab_context_menu)
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
         
+        # Connect tab bar moved signal to update indices
+        self.tab_widget.tabBar().tabMoved.connect(self.on_tab_moved)
+        
         # Global controls bar (zoom, lock, reload, add) - all in tab bar
         controls_container = QWidget()
         controls_container.setObjectName("controls_container")
@@ -300,6 +303,17 @@ class MainWindow(QMainWindow):
         """)
     
     def add_account(self):
+        # Check if too many accounts are already open
+        max_accounts = 8  # Reasonable limit to prevent crashes
+        if len(self.tabs) >= max_accounts:
+            QMessageBox.warning(
+                self,
+                "Too Many Accounts",
+                f"Maximum {max_accounts} accounts can be opened at once.\n\n"
+                "Please close some accounts before adding more."
+            )
+            return
+        
         name, ok = QInputDialog.getText(
             self, 
             "Add WhatsApp Account",
@@ -309,35 +323,87 @@ class MainWindow(QMainWindow):
         )
         
         if ok and name:
-            # Hide welcome tab before adding first account
-            self.show_welcome_if_empty()
-            
-            account_id, session_dir = self.db.add_account(name)
-            self.create_account_tab(account_id, name, session_dir)
-            
-            # Remove welcome tab after adding account
-            self.show_welcome_if_empty()
+            try:
+                self.show_welcome_if_empty()
+                
+                import gc
+                gc.collect()
+                
+                account_id, session_dir = self.db.add_account(name)
+                
+                from PyQt6.QtCore import QCoreApplication
+                for _ in range(5):
+                    QCoreApplication.processEvents()
+                
+                if len(self.tabs) >= 2:
+                    import time
+                    time.sleep(0.3)
+                
+                self.create_account_tab(account_id, name, session_dir)
+                
+                self.show_welcome_if_empty()
+                
+                if len(self.tabs) >= 3:
+                    QMessageBox.information(
+                        self,
+                        "Account Added",
+                        f"'{name}' added successfully!\n\n"
+                        f"Total accounts: {len(self.tabs)}\n\n"
+                        "Tip: Close unused accounts to improve performance."
+                    )
+                    
+            except Exception as e:
+                print(f"ERROR adding account: {e}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to add account:\n{str(e)}\n\n"
+                    "Please try again or restart the application."
+                )
     
     def create_account_tab(self, account_id, name, session_dir, zoom_level=1.0, password_hash=None):
-        has_password = password_hash is not None
-        tab = WhatsAppTab(account_id, name, session_dir, zoom_level, has_password, self.db)
-        # Use emoji only, shorter name for compact tabs
-        lock_icon = "🔒 " if has_password else ""
-        tab_title = f"{lock_icon}💬 {name}" if len(name) <= 10 else f"{lock_icon}💬 {name[:10]}..."
-        index = self.tab_widget.addTab(tab, tab_title)
-        self.tab_widget.setCurrentIndex(index)
-        
-        self.tabs[account_id] = {
-            "name": name,
-            "widget": tab,
-            "index": index
-        }
-        
-        # Update window title with account count
-        self.update_window_title()
-        
-        # Update global controls
-        self.update_global_controls()
+        try:
+            has_password = password_hash is not None
+            
+            tab = WhatsAppTab(account_id, name, session_dir, zoom_level, has_password, self.db)
+            
+            lock_icon = "🔒 " if has_password else ""
+            tab_title = f"{lock_icon}💬 {name}" if len(name) <= 10 else f"{lock_icon}💬 {name[:10]}..."
+            
+            index = self.tab_widget.addTab(tab, tab_title)
+            
+            self.tab_widget.setCurrentIndex(index)
+            
+            self.tabs[account_id] = {
+                "name": name,
+                "widget": tab,
+                "index": index
+            }
+            
+            self.update_window_title()
+            self.update_global_controls()
+            self.update_tab_indices()
+            
+        except Exception as e:
+            print(f"ERROR in create_account_tab: {e}")
+            raise
+    
+    def update_tab_indices(self):
+        """Update stored indices for all tabs"""
+        for account_id, info in self.tabs.items():
+            widget = info["widget"]
+            if widget is None:
+                continue
+                
+            current_index = self.tab_widget.indexOf(widget)
+            if current_index >= 0 and current_index != info["index"]:
+                info["index"] = current_index
+    
+    def on_tab_moved(self, from_index, to_index):
+        """Called when user drags tabs"""
+        self.update_tab_indices()
     
     def close_tab(self, index):
         try:
@@ -358,12 +424,10 @@ class MainWindow(QMainWindow):
                     break
             
             if account_id is None:
-                print(f"Warning: No account found for tab index {index}")
                 return
             
             name = self.tabs[account_id]["name"]
             
-            # Confirmation dialog
             reply = QMessageBox.question(
                 self,
                 "Remove Account",
@@ -377,37 +441,23 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                print(f"Removing account: {name} (ID: {account_id})")
-                
-                # Step 1: Remove from tracking FIRST (prevent re-entry)
                 tab_widget = self.tabs[account_id]["widget"]
                 del self.tabs[account_id]
                 
-                # Step 2: Remove from database (deletes session files)
-                try:
-                    self.db.delete_account(account_id)
-                    print(f"Database entry deleted for account {account_id}")
-                except Exception as e:
-                    print(f"Error deleting from database: {e}")
+                self.db.delete_account(account_id)
                 
-                # Step 3: Remove tab from UI (this triggers close event)
-                # Block signals temporarily to prevent recursion
                 self.tab_widget.blockSignals(True)
                 self.tab_widget.removeTab(index)
                 self.tab_widget.blockSignals(False)
                 
-                # Step 4: Cleanup webview (do this AFTER removing from UI)
-                # Note: Zoom level already auto-saved on each zoom change
-                try:
-                    tab_widget.cleanup()
-                    print(f"WebView cleanup completed")
-                except Exception as e:
-                    print(f"Error during cleanup: {e}")
+                tab_widget.cleanup()
                 
-                # Step 5: Update window title
                 self.update_window_title()
                 
-                # Step 6: Show welcome tab if no accounts left
+                # Step 6: Update all remaining tab indices
+                self.update_tab_indices()
+                
+                # Step 7: Show welcome tab if no accounts left
                 self.show_welcome_if_empty()
                 
                 print(f"Account removed successfully. Remaining accounts: {len(self.tabs)}")

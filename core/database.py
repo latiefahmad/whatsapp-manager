@@ -26,23 +26,15 @@ class Database:
             )
         """)
         
-        # Migration: Add zoom_level column if it doesn't exist
         try:
             cursor.execute("SELECT zoom_level FROM accounts LIMIT 1")
         except sqlite3.OperationalError:
-            # Column doesn't exist, add it
-            print("Migrating database: Adding zoom_level column...")
             cursor.execute("ALTER TABLE accounts ADD COLUMN zoom_level REAL DEFAULT 1.0")
-            print("Database migration completed!")
         
-        # Migration: Add password_hash column if it doesn't exist
         try:
             cursor.execute("SELECT password_hash FROM accounts LIMIT 1")
         except sqlite3.OperationalError:
-            # Column doesn't exist, add it
-            print("Migrating database: Adding password_hash column...")
             cursor.execute("ALTER TABLE accounts ADD COLUMN password_hash TEXT")
-            print("Password column added!")
         
         conn.commit()
         conn.close()
@@ -145,36 +137,23 @@ class Database:
             result = cursor.fetchone()
             
             if result:
-                import shutil
-                import time
+                import shutil, time
                 session_dir = Path(result[0])
                 
-                # Delete session directory
                 if session_dir.exists():
-                    try:
-                        # Retry mechanism for locked files
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                shutil.rmtree(session_dir)
-                                print(f"Session directory deleted: {session_dir}")
-                                break
-                            except PermissionError as e:
-                                if attempt < max_retries - 1:
-                                    print(f"Retry {attempt + 1}: Session dir locked, waiting...")
-                                    time.sleep(0.5)
-                                else:
-                                    print(f"Warning: Could not delete session dir (may be locked): {e}")
-                    except Exception as e:
-                        print(f"Error deleting session directory: {e}")
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            shutil.rmtree(session_dir)
+                            break
+                        except PermissionError:
+                            if attempt < max_retries - 1:
+                                time.sleep(0.5)
             
-            # Delete from database
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
             conn.commit()
-            print(f"Account {account_id} deleted from database")
             
         except Exception as e:
-            print(f"Error in delete_account: {e}")
             raise
         finally:
             conn.close()
